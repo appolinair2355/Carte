@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: telegram-deployment-bot
+    runtime: python3
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --preload
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        value: "7870922727:AAGXEEWNB7zz8M_k8WEyfEmEDMKxoFAaBwM"
+      - key: PORT
+        generateValue: true
+      - key: WEBHOOK_URL
+        generateValue: true
+        sync: false
+    healthCheckPath: /health
+    regions:
+      - oregon
