@@ -132,76 +132,49 @@ class CardPredictor:
             return combination
         return None
 
-    def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str]]:
+    def should_predict(self, text: str) -> tuple:
         """
-        SYSTÈME DE PRÉDICTION RAPIDE - Détermine si on doit faire une NOUVELLE prédiction (+1)
-        Détecte dès qu'il y a 3 costumes différents dans le premier parenthèse, même sur messages non finalisés
-        Returns: (should_predict, game_number, card_combination)
+        Determine if we should make a prediction based on the message content.
+        NOUVELLE RÈGLE: Quand le PREMIER parenthèse contient exactement 3 costumes différents,
+        génère une prédiction SEULEMENT si le DEUXIÈME parenthèse ne contient PAS 3 costumes différents.
+        Returns tuple: (should_predict: bool, game_number: int or None, combination: str or None)
         """
-        # Extract game number
-        game_number = self.extract_game_number(message)
-        if not game_number:
+        try:
+            # Vérifie si le message est finalisé
+            if not self.has_completion_indicators(text):
+                return False, None, None
+
+            # Extrait le numéro du jeu
+            game_number = self.extract_game_number(text)
+            if game_number is None:
+                return False, None, None
+
+            logger.info(f"🔮 Jeu {game_number}: Message final détecté (✅ ou 🔰)")
+
+            # Récupère les groupes entre parenthèses
+            parentheses_matches = re.findall(r"\(([^)]+)\)", text)
+            if not parentheses_matches:
+                return False, game_number, None
+
+            # Premier groupe
+            first_group_cards = self.extract_cards(parentheses_matches[0])
+            first_combination = self.detect_combination(first_group_cards)
+
+            if not first_combination:
+                return False, game_number, None
+
+            # Vérifie le deuxième groupe
+            if len(parentheses_matches) > 1:
+                second_group_cards = self.extract_cards(parentheses_matches[1])
+                if self.detect_combination(second_group_cards):
+                    # Si le deuxième groupe contient aussi 3 costumes différents → pas de prédiction
+                    return False, game_number, None
+
+            return True, game_number, first_combination
+
+        except Exception as e:
+            logger.error(f"Erreur dans should_predict: {e}")
             return False, None, None
-
-        logger.debug(f"🔮 PRÉDICTION RAPIDE - Analyse du jeu {game_number}")
-
-        # Skip if we already have a prediction for this exact next game number
-        next_game = game_number + 1
-        if next_game in self.predictions and self.predictions[next_game].get('status') == 'pending':
-            logger.info(f"🔮 Jeu {game_number}: Prédiction N{next_game} déjà existante, éviter doublon")
-            return False, None, None
-
-        # Extract card symbols from each parentheses section IMMÉDIATEMENT
-        parentheses_sections = self.extract_card_symbols_from_parentheses(message)
-        if not parentheses_sections:
-            logger.info(f"🔮 Jeu {game_number}: Aucune parenthèse trouvée")
-            return False, None, None
-
-        # SYSTÈME DE PRÉDICTION RAPIDE: Check if FIRST parentheses section has at least 2 different costumes
-        # MÊME SUR MESSAGES TEMPORAIRES (⏰▶🕐➡️)
-        if len(parentheses_sections) > 0:
-            first_section_symbols = parentheses_sections[0]
-            logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: Première parenthèse a {len(first_section_symbols)} costumes: {first_section_symbols}")
-            
-            if len(first_section_symbols) == 3:
-                # Found exactly 3 different costumes in FIRST parentheses - GENERATE PREDICTION IMMÉDIATEMENT
-                combination = ''.join(sorted(first_section_symbols))
-                logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: ✅ {len(first_section_symbols)} costumes trouvés dans PREMIÈRE parenthèse: {first_section_symbols}")
-                logger.info(f"🔮 RÈGLE PRÉDICTION RAPIDE RESPECTÉE: PREMIÈRE parenthèse avec {len(first_section_symbols)} costumes → génère prédiction IMMÉDIATE pour jeu {game_number + 1}")
-
-                # Check for pending indicators but don't block prediction
-                if self.has_pending_indicators(message):
-                    logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: Message temporaire détecté mais PRÉDICTION MAINTENUE (3 costumes trouvés)")
-                
-                # Check for completion indicators
-                if self.has_completion_indicators(message):
-                    logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: Message final détecté (✅ ou 🔰)")
-                    # Remove from temporary if it was there
-                    if game_number in self.temporary_messages:
-                        del self.temporary_messages[game_number]
-                        logger.info(f"🔮 Jeu {game_number}: Retiré des messages temporaires")
-
-                # Prevent duplicate processing avec optimisation
-                message_hash = hash(message)
-                if message_hash not in self.processed_messages:
-                    self.processed_messages.add(message_hash)
-                    logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: GÉNÉRATION IMMÉDIATE ⚡")
-                    return True, game_number, combination
-                else:
-                    logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: ⚠️ Déjà traité")
-                    return False, None, None
-            else:
-                logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: PREMIÈRE parenthèse n'a que {len(first_section_symbols)} costumes (besoin de 3 exactement)")
-                
-                # Store temporary message for later if it has pending indicators
-                if self.has_pending_indicators(message) and not self.has_completion_indicators(message):
-                    logger.info(f"🔮 Jeu {game_number}: Message temporaire stocké (en attente de plus de cartes)")
-                    self.temporary_messages[game_number] = message
-        else:
-            logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: Aucune parenthèse trouvée")
-
-        logger.info(f"🔮 PRÉDICTION RAPIDE - Jeu {game_number}: RÈGLE NON RESPECTÉE - Première parenthèse n'a pas exactement 3 costumes différents")
-        return False, None, None
 
     def make_prediction(self, game_number: int, combination: str) -> str:
         """Make a prediction for the next game"""
