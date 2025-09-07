@@ -131,94 +131,57 @@ class CardPredictor:
             logger.info(f"Accepting 3 different cards as valid: {combination}")
             return combination
         return None
-
-    def should_predict(self, text: str) -> tuple:
-        """
-        Determine if we should make a prediction based on the message content.
-        NOUVELLE RÈGLE: Quand le PREMIER parenthèse contient exactement 3 costumes différents,
-        génère une prédiction SEULEMENT si le DEUXIÈME parenthèse ne contient PAS 3 costumes différents.
-        Returns tuple: (should_predict: bool, game_number: int or None, combination: str or None)
+        
+def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str]]:
+        """Détermine si on doit lancer une prédiction automatique selon la règle stricte:
+        - Le message doit être FINALISÉ (✅ ou 🔰).
+        - Le 1er groupe entre parenthèses contient exactement 3 costumes différents.
+        - Le 2e groupe (s'il existe) ne doit PAS contenir 3 costumes différents.
+        Retourne: (should_predict: bool, game_number: int|None, combination: str|None)
         """
         try:
-            # Vérifie si le message est finalisé
-            if not self.has_completion_indicators(text):
+            # Numéro du jeu
+            game_number = self.extract_game_number(message)
+            if not game_number:
                 return False, None, None
 
-            # Extrait le numéro du jeu
-            game_number = self.extract_game_number(text)
-            if game_number is None:
-                return False, None, None
+            # Ne prédire que sur message finalisé
+            is_final = False
+            try:
+                # Compatibilité: certaines versions ont is_final_message, d'autres has_completion_indicators
+                if hasattr(self, 'is_final_message') and callable(getattr(self, 'is_final_message')):
+                    is_final = self.is_final_message(message)
+                if not is_final and hasattr(self, 'has_completion_indicators') and callable(getattr(self, 'has_completion_indicators')):
+                    is_final = self.has_completion_indicators(message)
+            except Exception:
+                pass
 
-            logger.info(f"🔮 Jeu {game_number}: Message final détecté (✅ ou 🔰)")
-
-            # Récupère les groupes entre parenthèses
-            parentheses_matches = re.findall(r"\(([^)]+)\)", text)
-            if not parentheses_matches:
+            if not is_final:
                 return False, game_number, None
 
-            # Premier groupe
-            first_group_cards = self.extract_cards(parentheses_matches[0])
-            first_combination = self.detect_combination(first_group_cards)
-
-            if not first_combination:
+            # Extraire les cartes par parenthèses (listes de symboles uniques)
+            sections = self.extract_card_symbols_from_parentheses(message)
+            if not sections:
                 return False, game_number, None
 
-            # Vérifie le deuxième groupe
-            if len(parentheses_matches) > 1:
-                second_group_cards = self.extract_cards(parentheses_matches[1])
-                if self.detect_combination(second_group_cards):
-                    # Si le deuxième groupe contient aussi 3 costumes différents → pas de prédiction
-                    return False, game_number, None
+            # 1er parenthèse: doit contenir 3 costumes différents
+            first_cards = sections[0]
+            if not self.has_three_different_cards(first_cards):
+                return False, game_number, None
 
-            return True, game_number, first_combination
+            combination = self.get_card_combination(first_cards)
+            if not combination:
+                return False, game_number, None
+
+            # 2e parenthèse: si elle contient aussi 3 costumes => pas de prédiction
+            if len(sections) > 1 and self.has_three_different_cards(sections[1]):
+                return False, game_number, None
+
+            return True, game_number, combination
 
         except Exception as e:
-            logger.error(f"Erreur dans should_predict: {e}")
+            logger.error(f"Erreur dans should_predict (règle stricte): {e}")
             return False, None, None
-
-    def make_prediction(self, game_number: int, combination: str) -> str:
-        """Make a prediction for the next game"""
-        next_game = game_number + 1
-        prediction_text = PREDICTION_MESSAGE.format(numero=next_game)
-
-        # Store the prediction for later verification
-        self.predictions[next_game] = {
-            'combination': combination,
-            'status': 'pending',
-            'predicted_from': game_number,
-            'verification_count': 0,
-            'message_text': prediction_text
-        }
-
-        logger.info(f"Made prediction for game {next_game} based on combination {combination}")
-        return prediction_text
-
-    def count_cards_in_winning_parentheses(self, message: str) -> int:
-        """Count the number of card symbols in the parentheses that has the ✅ symbol"""
-        # Split message at ✅ to find which section won
-        if '✅' not in message:
-            return 0
-
-        # Find the parentheses after ✅
-        checkmark_pos = message.find('✅')
-        remaining_text = message[checkmark_pos:]
-
-        # Extract parentheses content after ✅
-        pattern = r'\(([^)]+)\)'
-        match = re.search(pattern, remaining_text)
-
-        if match:
-            winning_content = match.group(1)
-            # Normalize ❤️ to ♥️ for consistent counting
-            normalized_content = winning_content.replace("❤️", "♥️")
-            card_count = 0
-            for symbol in ["♠️", "♥️", "♦️", "♣️"]:
-                card_count += normalized_content.count(symbol)
-            logger.info(f"Found ✅ winning section: {winning_content}, card count: {card_count}")
-            return card_count
-
-        return 0
-
     def extract_winning_section_costumes(self, message: str) -> Optional[List[str]]:
         """Extract unique card symbols from the winning section (after ✅)"""
         if '✅' not in message:
