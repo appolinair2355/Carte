@@ -47,6 +47,16 @@ class CardPredictor:
     def has_completion_indicators(self, text: str) -> bool:
         return any(ch in text for ch in ('✅', '🔰'))
 
+    def should_wait_for_edit(self, text: str, message_id: int) -> bool:
+        """Determine if we should wait for this message to be edited"""
+        if self.has_pending_indicators(text):
+            self.pending_edits[message_id] = {
+                'original_text': text,
+                'timestamp': datetime.now()
+            }
+            return True
+        return False
+
     def extract_card_symbols_from_parentheses(self, text: str) -> List[List[str]]:
         matches = re.findall(r' $([^)]+)$', text)
         out = []
@@ -105,7 +115,7 @@ class CardPredictor:
 
     # ---------- verification ----------
     def count_cards_in_first_parentheses(self, message: str) -> int:
-        m = re.search(r' $([^)]+)$', message)
+        m = re.search(r' $([^)]+)\', message)
         if not m:
             return 0
         content = m.group(1).replace("❤️", "♥️")
@@ -138,26 +148,5 @@ class CardPredictor:
                         'original_message': original
                     }
             elif offset >= 4:
-                original = f"🔵{predicted_game} 🔵3K: statut :⏳"
-                updated = f"🔵{predicted_game} 🔵3K: statut :⭕⭕"
-                pred['status'] = 'failed'
-                pred['final_message'] = updated
-                logger.info("Prediction %s failed after 4 games", predicted_game)
-                return {
-                    'type': 'update_message',
-                    'predicted_game': predicted_game,
-                    'new_message': updated,
-                    'original_message': original
-                }
-        return None
-
-    def verify_prediction(self, message: str) -> Optional[Dict]:
-        return self._verify_prediction_common(message, is_edited=False)
-
-    def verify_prediction_from_edit(self, message: str) -> Optional[Dict]:
-        return self._verify_prediction_common(message, is_edited=True)
-
-
-# ---------- global instance ----------
-card_predictor = CardPredictor()
+                original = f"🔵{predicted_game} 🔵3K: statut :
         
