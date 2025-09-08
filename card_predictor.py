@@ -1,175 +1,237 @@
-# -*- coding: utf-8 -*-
 """
-Joker TG Bot – Card-prediction core
-Webhook-safe, syntax-error-free, emoji-safe
+Card prediction logic for Joker's Telegram Bot - simplified for webhook deployment
 """
 
 import re
 import logging
-from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-# ----------------- config -----------------
+# Configuration constants
 VALID_CARD_COMBINATIONS = [
     "♠️♥️♦️", "♠️♥️♣️", "♠️♦️♣️", "♥️♦️♣️"
 ]
-CARD_SYMBOLS = ["♠️", "♥️", "♦️", "♣️", "❤️"]
+
+CARD_SYMBOLS = ["♠️", "♥️", "♦️", "♣️", "❤️"]  # Include both ♥️ and ❤️ variants
+
 PREDICTION_MESSAGE = "🔵{numero} 🔵3K: statut :⏳"
 
-TARGET_CHANNEL_ID = -1002682552255
-PREDICTION_CHANNEL_IDS = [-1002646551216, -100254391536]
-# -----------------------------------------
-
-
 class CardPredictor:
-    def __init__(self) -> None:
-        self.predictions: Dict[int, Dict] = {}
-        self.processed_messages = set()
-        self.sent_predictions = {}
-        self.temporary_messages = {}
-        self.pending_edits = {}
-
-    # ---------- utilities ----------
-    def reset_predictions(self) -> None:
-        self.predictions.clear()
-        self.processed_messages.clear()
-        self.sent_predictions.clear()
-        self.temporary_messages.clear()
-        self.pending_edits.clear()
-        logger.info("Prediction system reset")
-
+    """Handles card prediction logic for webhook deployment"""
+    
+    def __init__(self):
+        self.predictions = {}  # Store predictions for verification
+        self.processed_messages = set()  # Avoid duplicate processing
+        self.sent_predictions = {}  # Store sent prediction messages for editing
+        self.temporary_messages = {}  # Store temporary messages waiting for final edit
+    
     def extract_game_number(self, message: str) -> Optional[int]:
-        m = re.search(r'#[nN](\d+)', message)
-        return int(m.group(1)) if m else None
-
-    def has_pending_indicators(self, text: str) -> bool:
-        return any(ch in text for ch in ("⏰", "▶", "🕐", "➡️"))
-
-    def has_completion_indicators(self, text: str) -> bool:
-        return any(ch in text for ch in ("✅", "🔰"))
-
-    def should_wait_for_edit(self, text: str, message_id: int) -> bool:
-        if self.has_pending_indicators(text):
-            self.pending_edits[message_id] = {
-                "original_text": text,
-                "timestamp": datetime.now(),
-            }
-            return True
-        return False
-
-    def extract_card_symbols_from_parentheses(self, text: str) -> List[List[str]]:
-        matches = re.findall(r" $([^)]+)$", text)
-        sections: List[List[str]] = []
-        for m in matches:
-            m = m.replace("❤️", "♥️")
-            unique = {s for s in ("♠️", "♥️", "♦️", "♣️") if s in m}
-            sections.append(list(unique))
-        return sections
-
-    # ---------- prediction rule ----------
+        """Extract game number from message like #n744 or #N744"""
+        pattern = r'#[nN](\d+)'
+        match = re.search(pattern, message)
+        if match:
+            return int(match.group(1))
+        return None
+    
+    def extract_cards_from_parentheses(self, message: str) -> List[str]:
+        """Extract cards from first and second parentheses"""
+        pattern = r'\(([^)]+)\)'
+        matches = re.findall(pattern, message)
+        
+        card_groups = []
+        for match in matches[:2]:  # Only first two parentheses
+            cards = self.extract_card_symbols(match)
+            if cards:
+                card_groups.extend(cards)
+        
+        return card_groups
+    
+    def extract_card_symbols(self, text: str) -> List[str]:
+        """Extract card symbols from text"""
+        cards = []
+        # Normalize ❤️ to ♥️ for consistency
+        normalized_text = text.replace("❤️", "♥️")
+        
+        for symbol in ["♠️", "♥️", "♦️", "♣️"]:  # Use normalized symbols
+            count = normalized_text.count(symbol)
+            cards.extend([symbol] * count)
+        return cards
+    
+    def has_three_different_cards(self, cards: List[str]) -> bool:
+        """Check if there are exactly 3 different card symbols"""
+        unique_cards = list(set(cards))
+        return len(unique_cards) == 3
+    
+    def is_temporary_message(self, message: str) -> bool:
+        """Check if message contains temporary progress emojis"""
+        temporary_emojis = ['⏰', '▶', '🕐', '➡️']
+        return any(emoji in message for emoji in temporary_emojis)
+    
+    def is_final_message(self, message: str) -> bool:
+        """Check if message contains final completion emojis"""
+        final_emojis = ['✅', '🔰']
+        return any(emoji in message for emoji in final_emojis)
+    
+    def get_card_combination(self, cards: List[str]) -> Optional[str]:
+        """Get the combination of 3 different cards"""
+        unique_cards = list(set(cards))
+        if len(unique_cards) == 3:
+            combination = ''.join(sorted(unique_cards))
+            logger.info(f"Card combination found: {combination} from cards: {unique_cards}")
+            
+            # Check if this combination matches any valid pattern
+            for valid_combo in VALID_CARD_COMBINATIONS:
+                if set(combination) == set(valid_combo):
+                    logger.info(f"Valid combination matched: {valid_combo}")
+                    return combination
+            
+            # Accept any 3 different cards as valid
+            logger.info(f"Accepting 3 different cards as valid: {combination}")
+            return combination
+        return None
+    
     def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str]]:
+        """
+        Determine if we should make a prediction based on message content
+        Returns: (should_predict, game_number, card_combination)
+        """
+        # Extract game number
         game_number = self.extract_game_number(message)
         if not game_number:
             return False, None, None
-
-        logger.debug("Analysis for game %s", game_number)
-
-        next_game = game_number + 1
-        if next_game in self.predictions and self.predictions[next_game].get("status") == "pending":
-            logger.info("Prediction for N%s already pending", next_game)
+        
+        # Check if this is a temporary message (should wait for final edit)
+        if self.is_temporary_message(message):
+            logger.info(f"Game {game_number}: Temporary message detected")
+            self.temporary_messages[game_number] = message
             return False, None, None
-
-        sections = self.extract_card_symbols_from_parentheses(message)
-        if not sections:
-            logger.info("No parentheses found")
+        
+        # Check if this is a final message
+        if self.is_final_message(message) and game_number in self.temporary_messages:
+            logger.info(f"Game {game_number}: Final message detected")
+            del self.temporary_messages[game_number]
+        
+        # Extract cards from parentheses
+        pattern = r'\(([^)]+)\)'
+        matches = re.findall(pattern, message)
+        
+        if len(matches) < 1:
             return False, None, None
-
-        first, second = sections[0], sections[1] if len(sections) > 1 else []
-        if len(first) == 3 and len(second) != 3:
-            combo = "".join(sorted(first))
-            msg_hash = hash(message)
-            if msg_hash not in self.processed_messages:
-                self.processed_messages.add(msg_hash)
-                logger.info("Rule matched: first=3, second!=3 → predict")
-                return True, game_number, combo
-            else:
-                logger.info("Already processed")
-                return False, None, None
-        else:
-            logger.info("Rule NOT matched: first=%s, second=%s", len(first), len(second))
-            return False, None, None
-
-    # ---------- make prediction ----------
+        
+        # Check first parentheses
+        if len(matches) >= 1:
+            first_cards = self.extract_card_symbols(matches[0])
+            if self.has_three_different_cards(first_cards):
+                combination = self.get_card_combination(first_cards)
+                if combination:
+                    message_hash = hash(message)
+                    if message_hash not in self.processed_messages:
+                        self.processed_messages.add(message_hash)
+                        return True, game_number, combination
+        
+        # Check second parentheses
+        if len(matches) >= 2:
+            second_cards = self.extract_card_symbols(matches[1])
+            if self.has_three_different_cards(second_cards):
+                combination = self.get_card_combination(second_cards)
+                if combination:
+                    message_hash = hash(message)
+                    if message_hash not in self.processed_messages:
+                        self.processed_messages.add(message_hash)
+                        return True, game_number, combination
+        
+        return False, None, None
+    
     def make_prediction(self, game_number: int, combination: str) -> str:
+        """Make a prediction for the next game"""
         next_game = game_number + 1
-        text = PREDICTION_MESSAGE.format(numero=next_game)
+        prediction_text = PREDICTION_MESSAGE.format(numero=next_game)
+        
+        # Store the prediction for later verification
         self.predictions[next_game] = {
-            "combination": combination,
-            "status": "pending",
-            "predicted_from": game_number,
-            "verification_count": 0,
-            "message_text": text,
+            'combination': combination,
+            'status': 'pending',
+            'predicted_from': game_number,
+            'verification_count': 0,
+            'message_text': prediction_text
         }
-        logger.info("Prediction created for game %s", next_game)
-        return text
-
-    # ---------- verification ----------
+        
+        logger.info(f"Made prediction for game {next_game} based on combination {combination}")
+        return prediction_text
+    
     def count_cards_in_first_parentheses(self, message: str) -> int:
-        m = re.search(r" $([^)]+)$", message)
-        if not m:
-            return 0
-        content = m.group(1).replace("❤️", "♥️")
-        return sum(content.count(s) for s in ("♠️", "♥️", "♦️", "♣️"))
-
-    def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
+        """Count the number of card symbols in first parentheses"""
+        pattern = r'\(([^)]+)\)'
+        matches = re.findall(pattern, message)
+        
+        if matches:
+            first_content = matches[0]
+            # Normalize ❤️ to ♥️ for consistent counting
+            normalized_content = first_content.replace("❤️", "♥️")
+            card_count = 0
+            for symbol in ["♠️", "♥️", "♦️", "♣️"]:
+                card_count += normalized_content.count(symbol)
+            return card_count
+        
+        return 0
+    
+    def verify_prediction(self, message: str) -> Optional[Dict]:
+        """Verify if a prediction was correct"""
         game_number = self.extract_game_number(message)
         if not game_number:
             return None
-
-        logger.info("Verification for game %s (edited=%s)", game_number, is_edited)
-
-        for predicted_game in sorted(self.predictions):
-            pred = self.predictions[predicted_game]
-            if pred.get("status") != "pending":
+        
+        logger.info(f"Verifying prediction for game {game_number}")
+        logger.info(f"Message content: {message}")
+        
+        # Check all pending predictions
+        for predicted_game, prediction in self.predictions.items():
+            if prediction['status'] != 'pending':
                 continue
-            offset = game_number - predicted_game
-            if 0 <= offset <= 3 and is_edited and self.has_completion_indicators(message):
-                if self.count_cards_in_first_parentheses(message) >= 3:
-                    status = ("✅0️⃣", "✅1️⃣", "✅2️⃣", "✅3️⃣")[offset]
-                    original = f"🔵{predicted_game} 🔵3K: statut :⏳"
-                    updated = f"🔵{predicted_game} 🔵3K: statut :{status}"
-                    pred["status"] = "correct"
-                    pred["final_message"] = updated
-                    logger.info("Prediction %s verified (offset %s)", predicted_game, offset)
+                
+            verification_offset = game_number - predicted_game
+            logger.info(f"Checking prediction {predicted_game} vs game {game_number}, offset: {verification_offset}")
+            
+            if 0 <= verification_offset <= 3:
+                has_success_symbol = '✅' in message or '🔰' in message
+                card_count = self.count_cards_in_first_parentheses(message)
+                logger.info(f"Has success symbol: {has_success_symbol}, Card count: {card_count}")
+                
+                if has_success_symbol and card_count >= 3:
+                    status_map = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 3: '✅3️⃣'}
+                    new_status = status_map[verification_offset]
+                    
+                    updated_message = prediction['message_text'].replace('statut :⏳', f'statut :{new_status}')
+                    
+                    prediction['status'] = 'correct'
+                    prediction['verification_count'] = verification_offset
+                    prediction['final_message'] = updated_message
+                    
+                    logger.info(f"Prediction verified for game {predicted_game} at offset {verification_offset}")
                     return {
-                        "type": "update_message",
-                        "predicted_game": predicted_game,
-                        "new_message": updated,
-                        "original_message": original,
+                        'type': 'update_message',
+                        'predicted_game': predicted_game,
+                        'new_message': updated_message,
+                        'original_message': prediction['message_text']
                     }
-            elif offset >= 4:
-                original = f"🔵{predicted_game} 🔵3K: statut :⏳"
-                updated = f"🔵{predicted_game} 🔵3K: statut :⭕⭕"
-                pred["status"] = "failed"
-                pred["final_message"] = updated
-                logger.info("Prediction %s failed after 4 games", predicted_game)
-                return {
-                    "type": "update_message",
-                    "predicted_game": predicted_game,
-                    "new_message": updated,
-                    "original_message": original,
-                }
+                    
+                elif verification_offset == 3:
+                    # Failed after maximum attempts
+                    updated_message = prediction['message_text'].replace('statut :⏳', 'statut :❌⭕')
+                    
+                    prediction['status'] = 'failed'
+                    prediction['final_message'] = updated_message
+                    
+                    logger.info(f"Prediction failed for game {predicted_game}")
+                    return {
+                        'type': 'update_message',
+                        'predicted_game': predicted_game,
+                        'new_message': updated_message,
+                        'original_message': prediction['message_text']
+                    }
+        
         return None
 
-    def verify_prediction(self, message: str) -> Optional[Dict]:
-        return self._verify_prediction_common(message, is_edited=False)
-
-    def verify_prediction_from_edit(self, message: str) -> Optional[Dict]:
-        return self._verify_prediction_common(message, is_edited=True)
-
-
-# ---------- global instance ----------
+# Global instance
 card_predictor = CardPredictor()
-        

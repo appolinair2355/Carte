@@ -1,18 +1,25 @@
+# Render.com deployment configuration
 services:
   - type: web
     name: telegram-deployment-bot
-    runtime: python3
+    env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --preload
-    plan: free
+    startCommand: python main.py
     envVars:
       - key: BOT_TOKEN
-        value: "7870922727:AAGXEEWNB7zz8M_k8WEyfEmEDMKxoFAaBwM"
-      - key: PORT
-        generateValue: true
-      - key: WEBHOOK_URL
-        generateValue: true
         sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        value: https://telegram-deployment-bot.onrender.com
+      - key: PORT
+        value: 10000
+      - key: PYTHON_VERSION
+        value: "3.11"
+    autoDeploy: true
+    disk:
+      name: deployment-files
+      mountPath: /app
+      sizeGB: 1
     healthCheckPath: /health
-    regions:
-      - oregon
+    plan: free

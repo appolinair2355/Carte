@@ -11,11 +11,7 @@ class Config:
     
     def __init__(self):
         self.BOT_TOKEN = self._get_bot_token()
-        # Configuration webhook pour développement et production
-        repl_url = f'https://{os.getenv("REPL_SLUG", "")}.{os.getenv("REPL_OWNER", "")}.repl.co'
-        self.WEBHOOK_URL = os.getenv('WEBHOOK_URL', repl_url)
-        logger.info(f"Webhook URL configuré: {self.WEBHOOK_URL}")
-        # Port pour déploiement - utilise PORT env ou 10000 par défaut
+        self.WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
         self.PORT = int(os.getenv('PORT', 10000))
         self.DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
         
