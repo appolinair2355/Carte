@@ -26,8 +26,20 @@ def webhook():
     """Handle incoming webhook from Telegram"""
     try:
         update = request.get_json()
+        
+        # Log type de message reçu
+        if 'message' in update:
+            logger.info(f"📨 Webhook - Message normal reçu")
+        elif 'edited_message' in update:
+            logger.info(f"✏️ Webhook - Message édité reçu")
+        
+        logger.info(f"Webhook received update: {update}")
+        
         if update:
+            # Traitement direct pour meilleure réactivité
             bot.handle_update(update)
+            logger.info("Update processed successfully")
+        
         return 'OK', 200
     except Exception as e:
         logger.error(f"Error handling webhook: {e}")
@@ -46,17 +58,23 @@ def home():
 def setup_webhook():
     """Set up webhook on startup"""
     try:
-        webhook_url = os.getenv('WEBHOOK_URL')
-        if webhook_url:
-            success = bot.set_webhook(f"{webhook_url}/webhook")
+        # Utiliser l'URL configurée dans Config
+        webhook_url = config.WEBHOOK_URL
+        if webhook_url and webhook_url != "https://.repl.co":
+            full_webhook_url = f"{webhook_url}/webhook"
+            logger.info(f"🔗 Configuration webhook: {full_webhook_url}")
+            
+            success = bot.set_webhook(full_webhook_url)
             if success:
-                logger.info(f"Webhook set successfully to {webhook_url}/webhook")
+                logger.info(f"✅ Webhook configuré avec succès: {full_webhook_url}")
+                logger.info(f"🎯 Bot prêt pour prédictions automatiques et vérifications via webhook")
             else:
-                logger.error("Failed to set webhook")
+                logger.error("❌ Échec configuration webhook")
         else:
-            logger.warning("WEBHOOK_URL not provided, webhook not set")
+            logger.warning("⚠️ WEBHOOK_URL non configurée, mode polling recommandé pour le développement")
+            logger.info("💡 Pour activer le webhook, configurez la variable WEBHOOK_URL")
     except Exception as e:
-        logger.error(f"Error setting up webhook: {e}")
+        logger.error(f"❌ Erreur configuration webhook: {e}")
 
 if __name__ == '__main__':
     # Set up webhook on startup

@@ -11,7 +11,19 @@ class Config:
     
     def __init__(self):
         self.BOT_TOKEN = self._get_bot_token()
-        self.WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
+        # Configuration webhook pour développement et production
+        repl_slug = os.getenv("REPL_SLUG", "")
+        repl_owner = os.getenv("REPL_OWNER", "")
+        
+        # Construire l'URL Replit seulement si les variables existent
+        if repl_slug and repl_owner:
+            repl_url = f'https://{repl_slug}.{repl_owner}.repl.co'
+        else:
+            repl_url = ""
+            
+        self.WEBHOOK_URL = os.getenv('WEBHOOK_URL', repl_url)
+        logger.info(f"Webhook URL configuré: {self.WEBHOOK_URL}")
+        # Port pour render.com - utilise PORT env ou 10000 par défaut
         self.PORT = int(os.getenv('PORT', 10000))
         self.DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
         
@@ -35,7 +47,8 @@ class Config:
         if not self.BOT_TOKEN:
             raise ValueError("Bot token is required")
         
-        if len(self.BOT_TOKEN.split(':')) != 2:
+        # More flexible token validation for deployment
+        if ':' not in self.BOT_TOKEN or len(self.BOT_TOKEN) < 10:
             raise ValueError("Invalid bot token format")
         
         if self.WEBHOOK_URL and not self.WEBHOOK_URL.startswith('https://'):
